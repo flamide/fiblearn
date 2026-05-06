@@ -1,12 +1,12 @@
 use std::{
-    marker::PhantomData,
+    marker::PhantomData, vec,
 };
 
 use halo2_proofs::{
-    circuit::{AssignedCell, Layouter, SimpleFloorPlanner, Value},
+    circuit::{Layouter, SimpleFloorPlanner, Value},
     dev::MockProver,
     plonk::{
-        Advice, Circuit, Column, ConstraintSystem, Error, Selector
+        Advice, Circuit, Column, ConstraintSystem, Error, Instance, Selector
     },
     poly::Rotation,
 
@@ -25,7 +25,8 @@ struct TestCircuit<F: Field> {
 struct FibolearnChip<F: Field> {
     _ph: PhantomData<F>,
     q_selector: Selector,
-    adv: [Column<Advice>; 3]
+    adv: [Column<Advice>; 3],
+    instances: Column<Instance>,
 }
 
 impl<F: Field> FibolearnChip<F> {
@@ -38,6 +39,12 @@ impl<F: Field> FibolearnChip<F> {
         ];
 
         let q_selector = meta.complex_selector();
+        let instances = meta.instance_column();
+
+        meta.enable_equality(adv[2]);
+        meta.enable_equality(instances);
+
+
 
         // define the arithmetic gate
         meta.create_gate("fibolearn", |meta| {
@@ -46,7 +53,7 @@ impl<F: Field> FibolearnChip<F> {
             let val3 = meta.query_advice(adv[2], Rotation::cur());
 
             let q_selector = meta.query_selector(q_selector);
-
+            
             vec![q_selector * (val1 + val2 - val3)]
         });
 
@@ -54,6 +61,7 @@ impl<F: Field> FibolearnChip<F> {
             _ph: PhantomData,
             q_selector,
             adv,
+            instances,
         }
 
     }
@@ -63,13 +71,9 @@ impl<F: Field> FibolearnChip<F> {
         layouter: &mut impl Layouter<F>,
         first_value: Value<F>,
         second_value: Value<F>,
-    ) -> Result<AssignedCell<F, F>, Error> {
+    ) -> Result<(), Error> {
 
-        let third_value = first_value
-        .zip(second_value)
-        .map(|(a, b)| a + b);
-
-        layouter.assign_region(
+        let result =  layouter.assign_region(
             || "fibolearn",
             |mut region| {
                 self.q_selector.enable(&mut region, 0)?;
@@ -88,16 +92,22 @@ impl<F: Field> FibolearnChip<F> {
                     || second_value,
                 )?;
 
-                let third_cell = region.assign_advice(
-                    || "third value",
-                    self.adv[2],
-                    0,
-                    || third_value,
-                )?;
+                let sum = first_value.zip(second_value).map(|(a, b)| a + b);
 
-                Ok(third_cell)
-            }
+                region.assign_advice(|| "sum", 
+                self.adv[2], 
+                0, 
+                || sum)
+            },
+        )?;
+
+        layouter.constrain_instance(
+            result.cell(),
+            self.instances,
+            0,
         )
+
+    
     }
 
 }
@@ -143,9 +153,9 @@ fn main() {
     let circuit = TestCircuit::<Fr> {
         _ph: PhantomData,
         left: Value::known(Fr::from(1)),
-        right: Value::known(Fr::from(2))
+        right: Value::known(Fr::from(2)),
     };
 
-    let prover = MockProver::run(8, &circuit, vec![]).unwrap();
+    let prover = MockProver::run(8, &circuit, vec![vec![Fr::from(3)]]).unwrap();
     prover.verify().unwrap();
 }
